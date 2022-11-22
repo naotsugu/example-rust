@@ -1,7 +1,8 @@
 # Window win32
 
+Simple Windows window app.
 
-Use [windows crates](https://github.com/microsoft/windows-rs).
+Using [windows crates](https://github.com/microsoft/windows-rs).
 
 
 ```toml
