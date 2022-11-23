@@ -18,10 +18,11 @@ $ rustup update
 
 ## Examples
 
-| Name                              | Description                |
-| --------------------------------- | -------------------------- |
-| [hello_world](hello_world/)       | Just a Hello World         |
-| [gcd](gcd/)                       | Greatest common divisor    |
-| [window_win32](window_win32/)     | CreateWindow(Windows API)  |
-| [window_cocoa](window_cocoa/)     | CreateWindow(macOS API)    |
+| Name                              | Description                  |
+| --------------------------------- | ---------------------------- |
+| [hello_world](hello_world/)       | Just a Hello World           |
+| [gcd](gcd/)                       | Greatest common divisor      |
+| [window_win32](window_win32/)     | CreateWindow(Windows API)    |
+| [window_cocoa](window_cocoa/)     | CreateWindow(macOS API)      |
+| [winit](winit/)                   | Simple window of winit crate |
 

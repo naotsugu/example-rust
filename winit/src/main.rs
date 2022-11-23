@@ -4,9 +4,11 @@ use winit::{
     window::WindowBuilder,
 };
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
+        .with_inner_size(winit::dpi::LogicalSize::new(500, 300))
         .with_title("winit")
         .build(&event_loop).unwrap();
 
