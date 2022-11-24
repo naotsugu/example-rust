@@ -4,7 +4,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
