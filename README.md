@@ -25,5 +25,6 @@ $ rustup update
 | [window_win32](window_win32/)     | CreateWindow(Windows API)    |
 | [window_cocoa](window_cocoa/)     | CreateWindow(macOS API)      |
 | [winit](winit/)                   | Simple window of winit crate |
+| [winit_wgpu](winit_wgpu/)         | wgpu example on winit. |
 | [axum_hello](axum_hello/)         | Hello world of axum. axum is a web application framework. |
 
