@@ -56,7 +56,6 @@ fn main() {
 $ cargo build
 ```
 
-## 
 
 ## Test
 
