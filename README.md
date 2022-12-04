@@ -18,11 +18,21 @@ $ rustup update
 
 ## Examples
 
+
+### Basic
+
 | Name                              | Description                  |
 | --------------------------------- | ---------------------------- |
 | [hello_world](hello_world/)       | Just a Hello World           |
-| [fizzbuzz](fizzbuzz/)             | FizzBuzz                     |
+| [fizzbuzz](fizzbuzz/)             | FizzBuzz function            |
 | [gcd](gcd/)                       | Greatest common divisor      |
+
+
+
+### Crates
+
+| Name                              | Description                  |
+| --------------------------------- | ---------------------------- |
 | [window_win32](window_win32/)     | CreateWindow(Windows API)    |
 | [window_cocoa](window_cocoa/)     | CreateWindow(macOS API)      |
 | [winit](winit/)                   | Simple window of winit crate |

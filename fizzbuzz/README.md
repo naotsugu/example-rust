@@ -1,18 +1,20 @@
 # FizzBuzz
 
+
+When a function returns `()`, the return type can be omitted from the signature.
+
 ```rust
-fn main() {
-    fizzbuzz_to(20);
-}
-
-fn is_divisible_by(lhs: u32, rhs: u32) -> bool {
-    if rhs == 0 {
-        return false;
+fn fizzbuzz_to(n: u32) {
+    for n in 1..=n {
+        fizzbuzz(n);
     }
-    lhs % rhs == 0
 }
+```
 
 
+Functions that "don't" return a value, actually return the unit type `()`.
+
+```rust
 fn fizzbuzz(n: u32) -> () {
     if is_divisible_by(n, 15) {
         println!("fizzbuzz");
@@ -25,13 +27,27 @@ fn fizzbuzz(n: u32) -> () {
     }
 }
 
+```
 
-fn fizzbuzz_to(n: u32) {
-    for n in 1..=n {
-        fizzbuzz(n);
+
+Function that returns a boolean value.
+
+```rust
+fn is_divisible_by(lhs: u32, rhs: u32) -> bool {
+    if rhs == 0 {
+        return false;
     }
+    lhs % rhs == 0
 }
 ```
+
+
+```rust
+fn main() {
+    fizzbuzz_to(100);
+}
+```
+
 
 
 ## Build
