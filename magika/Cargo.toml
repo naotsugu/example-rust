@@ -1,0 +1,7 @@
+[package]
+name = "magika-simple"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+magika = "1.0.0"
