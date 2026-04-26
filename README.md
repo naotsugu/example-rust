@@ -40,4 +40,5 @@ $ rustup update
 | [axum_hello](axum_hello/)         | Hello world of axum. axum is a web application framework. |
 | [xilem_hello](xilem_hello/)       | xilem simple example. |
 | [nannou_hello](nannou_hello/)     | nannou simple example. |
+| [egui_paint](egui_paint/)         | egui paint example. |
 

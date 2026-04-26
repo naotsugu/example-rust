@@ -47,6 +47,7 @@ impl eframe::App for PaintApp {
         egui::Panel::top("toolbar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=50.0));
+                ui.separator();
                 ui.color_edit_button_srgba(&mut self.brush_color);
             });
         });
