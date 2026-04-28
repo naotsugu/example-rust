@@ -53,5 +53,5 @@ fn main() -> Result<(), EventLoopError> {
         Circles::view,
         WindowOptions::new("Canvas - Circles"),
     )
-        .run_in(EventLoop::with_user_event())
+    .run_in(EventLoop::with_user_event())
 }

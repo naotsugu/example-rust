@@ -21,11 +21,12 @@ $ rustup update
 
 ### Basic
 
-| Name                              | Description                  |
-| --------------------------------- | ---------------------------- |
-| [hello_world](hello_world/)       | Just a Hello World           |
-| [fizzbuzz](fizzbuzz/)             | FizzBuzz function            |
-| [gcd](gcd/)                       | Greatest common divisor      |
+| Name                                       | Description                  |
+| ------------------------------------------ | ---------------------------- |
+| [hello_world](hello_world/)                | Just a Hello World           |
+| [fizzbuzz](fizzbuzz/)                      | FizzBuzz function            |
+| [gcd](gcd/)                                | Greatest common divisor      |
+| [random_access_file](random_access_file/)  | Random access file           |
 
 
 
