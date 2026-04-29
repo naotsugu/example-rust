@@ -1,0 +1,8 @@
+[package]
+name = "masonry_hello"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+masonry = "0.4.0"
+masonry_winit = "0.4.0"
