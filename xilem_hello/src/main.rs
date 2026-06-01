@@ -1,32 +1,28 @@
-use winit::error::EventLoopError;
-use winit::window::Window;
-use xilem::view::{flex, label, textbox, FlexSpacer};
-use xilem::{EventLoop, WidgetView, Xilem};
-use xilem::dpi::LogicalSize;
+use masonry::properties::types::{CrossAxisAlignment, MainAxisAlignment};
+use xilem::winit::error::EventLoopError;
+use xilem::view::{FlexExt as _, flex_row, label};
+use xilem::{EventLoop, TextAlign, WidgetView, WindowOptions, Xilem};
 
 struct State {
     text: String,
 }
 
 fn app_logic(data: &mut State) -> impl WidgetView<State> + use<> {
-    flex((
-        FlexSpacer::Fixed(1.0),
-        label(format!("Hello {}", data.text)),
-        FlexSpacer::Fixed(1.0),
-        textbox(data.text.clone(), |state: &mut State, new_value| {
-            state.text = new_value;
-        }),
+    flex_row((
+        label(format!("Hello {}", data.text))
+            .text_size(32.)
+            .text_alignment(TextAlign::Center)
+            .flex(5.0),
     ))
+    .cross_axis_alignment(CrossAxisAlignment::Center)
+    .main_axis_alignment(MainAxisAlignment::Center)
 }
 
 fn main() -> Result<(), EventLoopError> {
-    let app = Xilem::new(State { text: "xilem".to_string() }, app_logic);
-    app.run_windowed_in(
-        EventLoop::with_user_event(),
-        Window::default_attributes()
-                     .with_title("Hello App")
-                     .with_resizable(true)
-                     .with_inner_size(LogicalSize::new(600., 300.))
-    )?;
+    let app = Xilem::new_simple(
+        State { text: "xilem".to_string() },
+        app_logic,
+        WindowOptions::new("xilem app"));
+    app.run_in(EventLoop::with_user_event())?;
     Ok(())
 }

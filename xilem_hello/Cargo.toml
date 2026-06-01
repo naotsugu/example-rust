@@ -1,8 +1,8 @@
 [package]
-name = "xilem_hello"
+name = "min-paint"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-xilem = "0.3.0"
-winit = "0.30.12"
+xilem = { git = "https://github.com/linebender/xilem.git" }
+masonry = { git = "https://github.com/linebender/xilem", package = "masonry" }
