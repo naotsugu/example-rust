@@ -1,0 +1,9 @@
+[package]
+name = "vello_hello"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vello = "0.9.0"
+winit = "0.30.13"
+pollster = "0.4"
