@@ -1,0 +1,11 @@
+[package]
+name = "vello_cpu_hello"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winit = "0.30.13"
+vello_common = "0.0.9"
+vello_cpu = "0.0.9"
+softbuffer = "0.4.8"
+image = "0.25.10"
