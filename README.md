@@ -45,4 +45,5 @@ $ rustup update
 | [nannou_hello](nannou_hello/)       | nannou simple example. |
 | [nannou_polyline](nannou_polyline/) | nannou polyline example. |
 | [egui_paint](egui_paint/)           | egui paint example. |
+| [vello_hello](vello_hello/)         | vello example. |
 
