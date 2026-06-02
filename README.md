@@ -46,4 +46,4 @@ $ rustup update
 | [nannou_polyline](nannou_polyline/) | nannou polyline example. |
 | [egui_paint](egui_paint/)           | egui paint example. |
 | [vello_hello](vello_hello/)         | vello example. |
-
+| [vello_cpu_hello](vello_cpu_hello/) | vello cpu example. |
