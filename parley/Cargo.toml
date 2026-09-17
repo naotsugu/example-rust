@@ -1,0 +1,15 @@
+[package]
+name = "parley"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# parley = "0.11.1"
+# peniko = "0.6.1"
+# vello_cpu = "0.2.0"
+
+winit = "0.30"
+wgpu = "28.0"         # vello 0.8.0 内部の wgpu に厳密に一致
+vello = "0.8.0"
+parley = "0.7.0"
+pollster = "0.3"

@@ -6,7 +6,7 @@ use vello_cpu::kurbo::{Rect, Shape};
 use vello_cpu::color::palette::css::{BLUE};
 use winit::{
     application::ApplicationHandler,
-    event::{Modifiers, WindowEvent},
+    event::{WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowId},
 };
