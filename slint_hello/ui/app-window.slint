@@ -1,4 +1,4 @@
-import { VerticalBox } from "std-widgets.slint";
+import { Button, VerticalBox } from "std-widgets.slint";
 
 export component AppWindow inherits Window {
     preferred-width: 300px;
@@ -6,9 +6,16 @@ export component AppWindow inherits Window {
 
     VerticalBox {
         alignment: center;
+        property <int> counter: 0;
         Text {
-            text: "Hello World";
+            text: "Count: " + counter;
             font-size: 24px;
+        }
+        Button {
+            text: "Click Me";
+            clicked => {
+                counter += 1;
+            }
         }
     }
 }

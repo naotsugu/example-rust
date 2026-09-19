@@ -1,0 +1,11 @@
+[package]
+name = "slint_img"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = "0.25.10"
+slint = "1.18.0"
+
+[build-dependencies]
+slint-build = "1.18.0"

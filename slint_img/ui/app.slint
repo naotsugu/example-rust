@@ -1,0 +1,14 @@
+export component AppWindow inherits Window {
+    width: 500px;
+    height: 500px;
+    title: "Slint Image Pixel Edit Example";
+
+    in-out property <image> target-image;
+
+    Image {
+        width: 100%;
+        height: 100%;
+        source: root.target-image;
+        image-fit: contain;
+    }
+}
