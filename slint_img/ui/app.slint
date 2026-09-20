@@ -4,7 +4,12 @@ export component AppWindow inherits Window {
     title: "Slint Image Pixel Edit Example";
 
     in-out property <image> target-image;
-    callback image-clicked(int, int);
+    // Fired on mouse down and on every mouse move while the button is pressed.
+    // Coordinates are in image pixel space and may lie outside the image
+    // (e.g. while dragging past the edge); the Rust side clips them.
+    callback stroke-point(int, int);
+    // Fired when the mouse button is released (or the gesture is cancelled)
+    callback stroke-end();
 
     Rectangle {
         width: 100%;
@@ -15,7 +20,6 @@ export component AppWindow inherits Window {
         property <float> img-h: root.target-image.height;
 
         // Scale factor equivalent to `image-fit: contain`
-        // (logical pixels per image pixel; guarded against an empty image)
         property <float> scale: (img-w > 0 && img-h > 0)
             ? min(self.width / 1px / img-w, self.height / 1px / img-h)
             : 1;
@@ -34,15 +38,22 @@ export component AppWindow inherits Window {
             source: root.target-image;
             image-fit: contain;
         }
+
         touch := TouchArea {
             width: 100%;
             height: 100%;
-            clicked => {
-                // Ignore clicks on the margins outside the image
-                if (parent.px >= 0 && parent.px < parent.img-w
-                    && parent.py >= 0 && parent.py < parent.img-h) {
-                    root.image-clicked(parent.px, parent.py);
+
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.stroke-point(parent.px, parent.py);
+                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    root.stroke-end();
                 }
+            }
+
+            // Called only while a button is held down
+            moved => {
+                root.stroke-point(parent.px, parent.py);
             }
         }
     }
