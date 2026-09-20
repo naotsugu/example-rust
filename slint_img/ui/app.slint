@@ -4,11 +4,46 @@ export component AppWindow inherits Window {
     title: "Slint Image Pixel Edit Example";
 
     in-out property <image> target-image;
+    callback image-clicked(int, int);
 
-    Image {
+    Rectangle {
         width: 100%;
         height: 100%;
-        source: root.target-image;
-        image-fit: contain;
+
+        // Image size in pixels
+        property <float> img-w: root.target-image.width;
+        property <float> img-h: root.target-image.height;
+
+        // Scale factor equivalent to `image-fit: contain`
+        // (logical pixels per image pixel; guarded against an empty image)
+        property <float> scale: (img-w > 0 && img-h > 0)
+            ? min(self.width / 1px / img-w, self.height / 1px / img-h)
+            : 1;
+
+        // Top-left corner of the displayed image (letterbox margins)
+        property <length> offset-x: (self.width - img-w * scale * 1px) / 2;
+        property <length> offset-y: (self.height - img-h * scale * 1px) / 2;
+
+        // Image pixel under the mouse cursor
+        property <int> px: Math.floor((touch.mouse-x - offset-x) / (scale * 1px));
+        property <int> py: Math.floor((touch.mouse-y - offset-y) / (scale * 1px));
+
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.target-image;
+            image-fit: contain;
+        }
+        touch := TouchArea {
+            width: 100%;
+            height: 100%;
+            clicked => {
+                // Ignore clicks on the margins outside the image
+                if (parent.px >= 0 && parent.px < parent.img-w
+                    && parent.py >= 0 && parent.py < parent.img-h) {
+                    root.image-clicked(parent.px, parent.py);
+                }
+            }
+        }
     }
 }
