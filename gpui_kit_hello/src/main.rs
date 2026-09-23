@@ -32,7 +32,9 @@ fn main() {
 
         let mut options = WindowOptions::default();
         options.window_bounds = Some(WindowBounds::Windowed(
-            Bounds::centered(None, Size { width: Pixels::from(300.0), height: Pixels::from(200.0) }, cx)
+            Bounds::centered(None, Size {
+                width: Pixels::from(300.0), height: Pixels::from(200.0)
+            }, cx)
         ));
 
         cx.spawn(async move |cx| {
