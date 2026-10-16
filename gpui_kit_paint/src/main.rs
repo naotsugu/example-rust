@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::cell::Cell;
 use std::rc::Rc;
 use gpui_kit::*;
 use gpui_kit::assets::Assets;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Sizable};
 
 // palette (column-major pairs: top row, bottom row)
@@ -25,12 +27,17 @@ const SIDEBAR_WIDTH: f32 = 96.;
 const SWATCH_SIZE: f32 = 16.;
 
 pub struct Application {
+    canvas_width: f32,
+    canvas_height: f32,
     strokes: Rc<Vec<Stroke>>,
     drawing: bool,
     brush_size: f32,
     current_color: Hsla,
+    zoom_percent: f32,
     size_input: Entity<InputState>,
     color_picker: Entity<ColorPickerState>,
+    zoom_slider: Entity<SliderState>,
+    canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>, // keep subscriptions alive for the lifetime of the view
 }
 
@@ -78,21 +85,58 @@ impl Application {
                 }
             }
         });
+
+        // zoom slider (percent)
+        let zoom_slider = cx.new(|_| {
+            SliderState::new()
+                .min(10.)
+                .max(400.)
+                .step(5.)
+                .default_value(100.)
+        });
+
+        // reflect the slider into the zoom factor
+        let zoom_sub = cx.subscribe(&zoom_slider, |this, _, ev: &SliderEvent, cx| {
+            if let SliderEvent::Change(value) = ev {
+                this.zoom_percent = value.start();
+                cx.notify();
+            }
+        });
+
         Self {
+            canvas_width: 842.,
+            canvas_height: 595.,
             strokes: Rc::new(vec![]),
             drawing: false,
             brush_size: 3.,
             current_color: initial_color,
+            zoom_percent: 100.,
             size_input,
             color_picker,
-            _subscriptions: vec![color_sub, size_sub],
+            zoom_slider,
+            canvas_bounds: Rc::new(Cell::new(Bounds::default())),
+            _subscriptions: vec![color_sub, size_sub, zoom_sub],
         }
     }
+
+    // zoom factor (1.0 = 100%)
+    fn zoom(&self) -> f32 {
+        self.zoom_percent / 100.
+    }
+
+    // convert a window position into canvas coordinates
+    fn to_canvas(&self, pos: Point<Pixels>) -> Point<Pixels> {
+        let origin = self.canvas_bounds.get().origin;
+        let zoom = self.zoom();
+        point((pos.x - origin.x) / zoom, (pos.y - origin.y) / zoom)
+    }
+
     fn handle_mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.drawing = true;
         // start a new stroke at the pressed position
+        let start = self.to_canvas(event.position);
         Rc::make_mut(&mut self.strokes).push(Stroke {
-            points: vec![event.position],
+            points: vec![start],
             color: self.current_color,
             size: self.brush_size,
         });
@@ -101,11 +145,12 @@ impl Application {
 
     fn handle_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.drawing {
+            let p = self.to_canvas(event.position);
             if let Some(stroke) = Rc::make_mut(&mut self.strokes).last_mut() {
-                stroke.points.push(event.position);
+                stroke.points.push(p);
             }
+            cx.notify();
         }
-        cx.notify();
     }
 
     fn handle_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -113,7 +158,7 @@ impl Application {
         cx.notify();
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
 
         // brush size input
         let brush_size = div()
@@ -172,55 +217,111 @@ impl Application {
             .child(current)
             .child(grid)
     }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .w_full()
+            .h(px(32.))
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .gap(px(8.))
+            .px(px(12.))
+            .bg(cx.theme().secondary)
+            .border_t_1()
+            .border_color(cx.theme().sidebar_border)
+            .child(div().text_xs().child("Zoom"))
+            .child(Slider::new(&self.zoom_slider).w(px(160.)))
+            .child(
+                div()
+                    .w(px(44.))
+                    .text_xs()
+                    .child(format!("{}%", self.zoom_percent.round() as i32)),
+            )
+    }
 }
 
 impl Render for Application {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
 
         let strokes = self.strokes.clone();
+        let zoom = self.zoom();
+        let canvas_bounds = self.canvas_bounds.clone();
         let sidebar = self.render_sidebar(cx);
+        let footer = self.render_footer(cx);
+
+
+        // the canvas (document): fixed size scaled by the zoom factor
+        let document = div()
+            .relative()
+            .flex_none()
+            .w(px(self.canvas_width * zoom))
+            .h(px(self.canvas_height * zoom))
+            .overflow_hidden()
+            .bg(rgb(0xffffff))
+            .cursor(CursorStyle::Crosshair)
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
+            .child(
+                canvas(
+                    // record the canvas bounds (window coordinates, scroll offset included)
+                    move |bounds, _, _| canvas_bounds.set(bounds),
+                    move |bounds, _, window, _| {
+                        // draw strokes: canvas coordinates -> window coordinates
+                        for stroke in strokes.iter() {
+                            // a single point cannot form a line
+                            if stroke.points.len() < 2 {
+                                continue;
+                            }
+                            let to_window = |p: Point<Pixels>| {
+                                point(bounds.origin.x + p.x * zoom, bounds.origin.y + p.y * zoom)
+                            };
+                            let mut builder = PathBuilder::stroke(px(stroke.size * zoom));
+                            builder.move_to(to_window(stroke.points[0]));
+                            for p in &stroke.points[1..] {
+                                builder.line_to(to_window(*p));
+                            }
+                            if let Ok(path) = builder.build() {
+                                window.paint_path(path, stroke.color);
+                            }
+                        }
+                    },
+                )
+                    .size_full(),
+            );
+
+
+        // viewport: scrollable area holding the canvas; move/up handlers live here so a
+        // stroke keeps following the mouse even when it leaves the canvas
+        let viewport = div()
+            .id("viewport")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_scroll()
+            .bg(rgb(0xc8c8c8))
+            .p(px(12.))
+            .on_mouse_move(cx.listener(Self::handle_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::handle_mouse_up))
+            .child(document);
+
 
         div()
             .size_full()
             .flex()
-            .flex_row()
-            .child(sidebar)
+            .flex_col()
             .child(
-                // drawing area: mouse handlers live here so sidebar clicks don't draw
                 div()
                     .flex_1()
-                    .h_full()
-                    .overflow_hidden()
-                    .bg(rgb(0xffffff))
-                    .cursor(CursorStyle::Crosshair)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
-                    .on_mouse_move(cx.listener(Self::handle_mouse_move))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
-                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::handle_mouse_up))
-                    .child(
-                        canvas(
-                            |_, _, _| (),
-                            move |_, _, window, _| {
-                                // draw strokes
-                                for stroke in strokes.iter() {
-                                    // a single point cannot form a line
-                                    if stroke.points.len() < 2 {
-                                        continue;
-                                    }
-                                    let mut builder = PathBuilder::stroke(px(stroke.size));
-                                    builder.move_to(stroke.points[0]);
-                                    for p in &stroke.points[1..] {
-                                        builder.line_to(*p);
-                                    }
-                                    if let Ok(path) = builder.build() {
-                                        window.paint_path(path, stroke.color);
-                                    }
-                                }
-                            },
-                        )
-                            .size_full(),
-                    ),
+                    .min_h_0()
+                    .flex()
+                    .flex_row()
+                    .child(sidebar)
+                    .child(viewport),
             )
+            .child(footer)
     }
 }
 
