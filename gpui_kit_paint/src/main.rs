@@ -2,6 +2,10 @@
 
 use std::rc::Rc;
 use gpui_kit::*;
+use gpui_kit::assets::Assets;
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
+use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
+use gpui_kit::component::{ActiveTheme, Sizable};
 
 // palette (column-major pairs: top row, bottom row)
 const PALETTE: [u32; 20] = [
@@ -17,13 +21,17 @@ const PALETTE: [u32; 20] = [
     0xa349a4, 0xc8bfe7, // purple, lavender
 ];
 
-const SIDEBAR_WIDTH: f32 = 46.;
+const SIDEBAR_WIDTH: f32 = 96.;
 const SWATCH_SIZE: f32 = 16.;
 
 pub struct Application {
     strokes: Rc<Vec<Stroke>>,
     drawing: bool,
+    brush_size: f32,
     current_color: Hsla,
+    size_input: Entity<InputState>,
+    color_picker: Entity<ColorPickerState>,
+    _subscriptions: Vec<Subscription>, // keep subscriptions alive for the lifetime of the view
 }
 
 #[derive(Clone, Debug)]
@@ -34,11 +42,50 @@ struct Stroke {
 }
 
 impl Application {
-    fn new() -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+
+        // brush size input
+        let size_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value("3")
+                .step(1.)
+                .min(1.)
+        });
+
+        // reflect the number input into the brush size
+        let size_sub = cx.subscribe_in(&size_input, window, |this, state, ev, _window, cx| {
+            if let InputEvent::Change = ev {
+                let text = state.read(cx).value();
+                // a typed value may be empty or out of range while editing; ignore/clamp it
+                if let Ok(v) = text.parse::<f32>() {
+                    if v.is_finite() {
+                        this.brush_size = v.clamp(1., 500.);
+                        cx.notify();
+                    }
+                }
+            }
+        });
+
+        let initial_color: Hsla = rgb(PALETTE[0]).into();
+        let color_picker = cx.new(|cx| ColorPickerState::new(window, cx).default_value(initial_color));
+
+        // reflect colors chosen in the picker popover into the drawing color
+        let color_sub = cx.subscribe(&color_picker, |this, _, ev, cx| match ev {
+            ColorPickerEvent::Change(color) => {
+                if let Some(color) = color {
+                    this.current_color = *color;
+                    cx.notify();
+                }
+            }
+        });
         Self {
             strokes: Rc::new(vec![]),
             drawing: false,
-            current_color: rgb(PALETTE[0]).into(),
+            brush_size: 3.,
+            current_color: initial_color,
+            size_input,
+            color_picker,
+            _subscriptions: vec![color_sub, size_sub],
         }
     }
     fn handle_mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -47,7 +94,7 @@ impl Application {
         Rc::make_mut(&mut self.strokes).push(Stroke {
             points: vec![event.position],
             color: self.current_color,
-            size: 3.0,
+            size: self.brush_size,
         });
         cx.notify();
     }
@@ -67,15 +114,16 @@ impl Application {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // current color indicator (like "Color 1" in Paint)
-        let current = div()
-            .w(px(SWATCH_SIZE * 2. + 4.))
-            .h(px(SWATCH_SIZE * 2.))
-            .bg(self.current_color)
-            .border_1()
-            .border_color(rgb(0x808080));
 
-        // Palette grid: 2 columns, wrapped
+        // brush size input
+        let brush_size = div()
+            .w_full()
+            .child(NumberInput::new(&self.size_input).xsmall());
+
+        // current color indicator
+        let current = ColorPicker::new(&self.color_picker).anchor(Anchor::TopRight);
+
+        // palette grid: 2 columns, wrapped
         let mut grid = div()
             .flex()
             .flex_row()
@@ -96,9 +144,12 @@ impl Application {
                     .cursor(CursorStyle::PointingHand)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            // Change the drawing color for subsequent strokes
+                        cx.listener(move |this, _, window, cx| {
+                            // change the drawing color for subsequent strokes
                             this.current_color = color;
+                            // keep the picker's displayed color in sync (does not emit Change)
+                            this.color_picker
+                                .update(cx, |state, cx| state.set_value(color, window, cx));
                             cx.notify();
                         }),
                     ),
@@ -114,9 +165,10 @@ impl Application {
             .items_center()
             .gap(px(12.))
             .p(px(10.))
-            .bg(rgb(0xf0f0f0))
+            .bg(cx.theme().secondary)
             .border_r_1()
-            .border_color(rgb(0xd0d0d0))
+            .border_color(cx.theme().sidebar_border)
+            .child(brush_size)
             .child(current)
             .child(grid)
     }
@@ -134,7 +186,7 @@ impl Render for Application {
             .flex_row()
             .child(sidebar)
             .child(
-                // Drawing area: mouse handlers live here so sidebar clicks don't draw
+                // drawing area: mouse handlers live here so sidebar clicks don't draw
                 div()
                     .flex_1()
                     .h_full()
@@ -149,9 +201,9 @@ impl Render for Application {
                         canvas(
                             |_, _, _| (),
                             move |_, _, window, _| {
-                                // Draw strokes
+                                // draw strokes
                                 for stroke in strokes.iter() {
-                                    // A single point cannot form a line
+                                    // a single point cannot form a line
                                     if stroke.points.len() < 2 {
                                         continue;
                                     }
@@ -174,12 +226,12 @@ impl Render for Application {
 
 fn main() {
 
-    application().run(move |cx| {
+    application().with_assets(Assets).run(move |cx| {
 
         gpui_kit::init(cx);
 
         let window_options = window_options(cx);
-        open_window(window_options, cx, |_, cx| cx.new(|_| Application::new()))
+        open_window(window_options, cx, |window, cx| cx.new(|cx| Application::new(window, cx)))
             .expect("failed to open window");
 
         cx.on_window_closed(|cx, _window_id| {
