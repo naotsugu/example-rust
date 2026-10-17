@@ -25,10 +25,15 @@ const PALETTE: [u32; 20] = [
 
 const SIDEBAR_WIDTH: f32 = 96.;
 const SWATCH_SIZE: f32 = 16.;
+const FOOTER_HEIGHT: f32 = 32.;
+
+// minimum gap between the canvas and the viewport edge when scrolled to an end
+const CANVAS_MARGIN: f32 = 12.;
 
 pub struct Application {
     canvas_width: f32,
     canvas_height: f32,
+    // stroke points are stored in canvas coordinates (independent of zoom and scroll)
     strokes: Rc<Vec<Stroke>>,
     drawing: bool,
     brush_size: f32,
@@ -37,6 +42,11 @@ pub struct Application {
     size_input: Entity<InputState>,
     color_picker: Entity<ColorPickerState>,
     zoom_slider: Entity<SliderState>,
+    // scroll state of the viewport, used to keep the zoom centered
+    scroll_handle: ScrollHandle,
+    // size of the viewport area (window minus sidebar and footer), updated every render
+    viewport_size: Size<Pixels>,
+    // canvas bounds in window coordinates, recorded every frame during prepaint
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>, // keep subscriptions alive for the lifetime of the view
 }
@@ -95,17 +105,17 @@ impl Application {
                 .default_value(100.)
         });
 
-        // reflect the slider into the zoom factor
+        // reflect the slider into the zoom factor, keeping the viewport center fixed
         let zoom_sub = cx.subscribe(&zoom_slider, |this, _, ev: &SliderEvent, cx| {
             if let SliderEvent::Change(value) = ev {
-                this.zoom_percent = value.start();
+                this.apply_zoom(value.start());
                 cx.notify();
             }
         });
 
         Self {
-            canvas_width: 842.,
-            canvas_height: 595.,
+            canvas_width: 600.,
+            canvas_height: 500.,
             strokes: Rc::new(vec![]),
             drawing: false,
             brush_size: 3.,
@@ -114,6 +124,8 @@ impl Application {
             size_input,
             color_picker,
             zoom_slider,
+            scroll_handle: ScrollHandle::new(),
+            viewport_size: Size::default(),
             canvas_bounds: Rc::new(Cell::new(Bounds::default())),
             _subscriptions: vec![color_sub, size_sub, zoom_sub],
         }
@@ -123,6 +135,44 @@ impl Application {
     fn zoom(&self) -> f32 {
         self.zoom_percent / 100.
     }
+
+    // size of the scrollable content at the given zoom: the canvas plus margins, but never
+    // smaller than the viewport (so the canvas can be centered when it is small)
+    fn content_size(&self, zoom: f32) -> (f32, f32) {
+        let view_w = f32::from(self.viewport_size.width);
+        let view_h = f32::from(self.viewport_size.height);
+        (
+            (self.canvas_width * zoom + CANVAS_MARGIN * 2.).max(view_w),
+            (self.canvas_height * zoom + CANVAS_MARGIN * 2.).max(view_h),
+        )
+    }
+
+    // change the zoom while keeping the canvas point at the viewport center in place
+    fn apply_zoom(&mut self, new_percent: f32) {
+        let old_zoom = self.zoom();
+        let new_zoom = new_percent / 100.;
+
+        let view_w = f32::from(self.viewport_size.width);
+        let view_h = f32::from(self.viewport_size.height);
+        let (old_w, old_h) = self.content_size(old_zoom);
+        let (new_w, new_h) = self.content_size(new_zoom);
+
+        // the scroll offset is <= 0 (content moves left/up as the viewport scrolls right/down)
+        let offset = self.scroll_handle.offset();
+
+        // offset of the viewport center from the canvas center, in canvas units
+        // (the canvas is centered inside the content, so the canvas center is the content center)
+        let dx = (-f32::from(offset.x) + view_w / 2. - old_w / 2.) / old_zoom;
+        let dy = (-f32::from(offset.y) + view_h / 2. - old_h / 2.) / old_zoom;
+
+        // new offset that puts the same canvas point back at the viewport center
+        let new_x = (view_w / 2. - (new_w / 2. + dx * new_zoom)).clamp(-(new_w - view_w).max(0.), 0.);
+        let new_y = (view_h / 2. - (new_h / 2. + dy * new_zoom)).clamp(-(new_h - view_h).max(0.), 0.);
+
+        self.scroll_handle.set_offset(point(px(new_x), px(new_y)));
+        self.zoom_percent = new_percent;
+    }
+
 
     // convert a window position into canvas coordinates
     fn to_canvas(&self, pos: Point<Pixels>) -> Point<Pixels> {
@@ -221,7 +271,7 @@ impl Application {
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .w_full()
-            .h(px(32.))
+            .h(px(FOOTER_HEIGHT))
             .flex_none()
             .flex()
             .flex_row()
@@ -244,11 +294,19 @@ impl Application {
 }
 
 impl Render for Application {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+
+        // the viewport is whatever remains of the window after the fixed sidebar and footer
+        let window_size = window.viewport_size();
+        self.viewport_size = size(
+            window_size.width - px(SIDEBAR_WIDTH),
+            window_size.height - px(FOOTER_HEIGHT),
+        );
 
         let strokes = self.strokes.clone();
         let zoom = self.zoom();
         let canvas_bounds = self.canvas_bounds.clone();
+        let (content_w, content_h) = self.content_size(zoom);
         let sidebar = self.render_sidebar(cx);
         let footer = self.render_footer(cx);
 
@@ -291,6 +349,15 @@ impl Render for Application {
                     .size_full(),
             );
 
+        // scrollable content: at least as large as the viewport, with the canvas centered in it
+        let content = div()
+            .flex_none()
+            .w(px(content_w))
+            .h(px(content_h))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(document);
 
         // viewport: scrollable area holding the canvas; move/up handlers live here so a
         // stroke keeps following the mouse even when it leaves the canvas
@@ -299,14 +366,13 @@ impl Render for Application {
             .flex_1()
             .min_w_0()
             .h_full()
+            .track_scroll(&self.scroll_handle)
             .overflow_scroll()
             .bg(rgb(0xc8c8c8))
-            .p(px(12.))
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::handle_mouse_up))
-            .child(document);
-
+            .child(content);
 
         div()
             .size_full()
