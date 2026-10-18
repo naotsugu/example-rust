@@ -459,7 +459,6 @@ struct Selection {
     h: i32,
     floating: Option<Bitmap>,
 }
-
 impl Selection {
     fn contains(&self, p: (i32, i32)) -> bool {
         p.0 >= self.x && p.0 < self.x + self.w && p.1 >= self.y && p.1 < self.y + self.h
@@ -507,7 +506,8 @@ pub struct Application {
     shape_backup: Option<Bitmap>,
     shape_bounds: Option<(i32, i32, i32, i32)>,
     selection: Option<Selection>,
-    // pixel under the mouse pointer, if it is inside the canvas
+    // whether the mouse pointer is over the selection (decides the pointer shape)
+    over_selection: bool,    // pixel under the mouse pointer, if it is inside the canvas
     cursor_px: Option<(i32, i32)>,
     current_color: Hsla,
     zoom_percent: f32,
@@ -616,6 +616,7 @@ impl Application {
             shape_backup: None,
             shape_bounds: None,
             selection: None,
+            over_selection: false,
             cursor_px: None,
             current_color: initial_color,
             zoom_percent: 100.,
@@ -944,6 +945,17 @@ impl Application {
             self.bitmap.fill_rect(sel.x, sel.y, sel.w, sel.h, BACKGROUND);
         }
         self.record_history();
+        self.mark_dirty();
+        cx.notify();
+    }
+
+    // Esc: drop the selection, keeping the moved pixels in place
+    fn deselect(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.drag, Drag::SelectNew { .. } | Drag::SelectMove { .. }) {
+            self.drag = Drag::None;
+        }
+        self.commit_selection();
+        self.over_selection = false;
         self.mark_dirty();
         cx.notify();
     }
@@ -1317,7 +1329,12 @@ impl Application {
             self.cursor_px = cursor;
             changed = true;
         }
-
+        // the pointer shape depends on whether the pointer is over the selection
+        let over = self.selection.as_ref().is_some_and(|s| s.contains(p));
+        if over != self.over_selection {
+            self.over_selection = over;
+            changed = true;
+        }
         match self.drag {
             Drag::None => {}
             Drag::Draw => {
@@ -1360,7 +1377,7 @@ impl Application {
         }
     }
 
-    fn handle_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn handle_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Draw => {
                 self.shape_backup = None;
@@ -1382,6 +1399,11 @@ impl Application {
             // the move is recorded as one step when the selection is flattened
             Drag::SelectMove { .. } | Drag::None => {}
         }
+
+        // the selection may have just been created, moved or cleared
+        let p = self.to_canvas_px(event.position);
+        self.over_selection = self.selection.as_ref().is_some_and(|s| s.contains(p));
+
         self.mark_dirty();
         cx.notify();
     }
@@ -1401,7 +1423,6 @@ impl Application {
             return;
         }
         let key = &event.keystroke;
-        println!("key:{:?}", key);
         if key.modifiers.platform {
             match key.key.as_str() {
                 "z" if key.modifiers.shift => self.redo(window, cx),
@@ -1415,6 +1436,8 @@ impl Application {
             }
         } else if key.key == "delete" {
             self.delete_selection(cx);
+        } else if key.key == "escape" {
+             self.deselect(cx);
         }
     }
 
@@ -1701,6 +1724,13 @@ impl Render for Application {
         let sidebar = self.render_sidebar(cx);
         let footer = self.render_footer(cx);
 
+        // pointer shape: closed hand while moving the selection, open hand over it
+        let pointer = match self.drag {
+            Drag::SelectMove { .. } => CursorStyle::ClosedHand,
+            Drag::None if self.over_selection && self.selection.is_some() => CursorStyle::OpenHand,
+            _ => CursorStyle::Crosshair,
+        };
+
         // viewport: shows the pre-rendered image; the handlers live here so a stroke
         // keeps following the mouse even when it leaves the canvas
         let viewport = div()
@@ -1710,7 +1740,7 @@ impl Render for Application {
             .h_full()
             .overflow_hidden()
             .bg(rgb(0xc8c8c8))
-            .cursor(CursorStyle::Crosshair)
+            .cursor(pointer)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
