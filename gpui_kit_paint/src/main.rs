@@ -1170,14 +1170,10 @@ impl Application {
             .child(self.tool_button("Select", Tool::Select, cx));
 
         // rectangle / ellipse style
-        let filled_label = if self.shape_filled { "Filled: on" } else { "Filled: off" };
-        let filled_button = self.button_base(filled_label, false, cx).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, _, cx| {
-                this.shape_filled = !this.shape_filled;
-                cx.notify();
-            }),
-        );
+        let filled_button = Toggle::new("filled").label("Filled").xsmall().checked(self.shape_filled)
+            .on_click(cx.listener(|this, checked, _, cx| {
+                this.shape_filled = *checked; cx.notify();
+            }));
 
         // brush size input
         let brush_size = div()
