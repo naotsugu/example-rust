@@ -12,7 +12,6 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::marker::{Marker, MarkerContent, MarkerVariant};
 
 // palette (column-major pairs: top row, bottom row)
 const PALETTE: [u32; 20] = [
@@ -752,7 +751,7 @@ impl Application {
         let bw = self.bitmap.width as i32;
         let bh = self.bitmap.height as i32;
 
-        // canvas coordinate of every device column/row (-1 = outside of the canvas)
+        // canvas coordinate of every device column/row (-1 = outside the canvas)
         let map = |origin: f32, count: usize, limit: i32| -> Vec<i32> {
             (0..count)
                 .map(|i| {
@@ -961,6 +960,88 @@ impl Application {
             h: (s.1 - e.1).abs() + 1,
             floating: None,
         });
+    }
+
+    // copy the selection to the system clipboard as an image
+    fn copy_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(sel) = &self.selection else { return };
+        // lifted pixels live in the selection, otherwise read them from the bitmap
+        let region = match &sel.floating {
+            Some(floating) => floating.clone(),
+            None => self.bitmap.copy_region(sel.x, sel.y, sel.w, sel.h),
+        };
+        let bytes: Vec<u8> = region.pixels.iter().flatten().copied().collect();
+        let Some(buffer) = image::RgbaImage::from_raw(region.width as u32, region.height as u32, bytes) else {
+            return;
+        };
+
+        // encode as PNG and put it on the clipboard through gpui
+        let mut png = Vec::new();
+        if let Err(e) = buffer.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png) {
+            show_error(&format!("Failed to encode the image: {e}"));
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, png)));
+    }
+
+    // paste the clipboard image as a floating selection that can be moved before it is committed
+    fn paste_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else { return };
+        // the clipboard holds no image (for example text): nothing to paste
+        let Some(clip_image) = item.entries().iter().find_map(|entry| match entry {
+            ClipboardEntry::Image(image) => Some(image),
+            _ => None,
+        }) else {
+            return;
+        };
+        let decoded = match image::load_from_memory(&clip_image.bytes) {
+            Ok(img) => img.to_rgba8(),
+            Err(e) => {
+                show_error(&format!("Failed to read the clipboard image: {e}"));
+                return;
+            }
+        };
+        let (w, h) = (decoded.width() as usize, decoded.height() as usize);
+        if w == 0 || h == 0 || w > MAX_CANVAS_SIZE || h > MAX_CANVAS_SIZE {
+            show_error(&format!("The clipboard image must be at most {MAX_CANVAS_SIZE} px on each side."));
+            return;
+        }
+
+        // the canvas is opaque, so flatten transparency onto white
+        let pixels = decoded
+            .pixels()
+            .map(|p| {
+                let a = p[3] as u32;
+                let blend = |c: u8| ((c as u32 * a + 255 * (255 - a) + 127) / 255) as u8;
+                [blend(p[0]), blend(p[1]), blend(p[2]), 0xff]
+            })
+            .collect();
+        let pasted = Bitmap { width: w, height: h, pixels, dirty: None };
+
+        // flatten the previous selection first
+        self.commit_selection();
+
+        // grow the canvas when the image does not fit (undoable)
+        if w > self.bitmap.width || h > self.bitmap.height {
+            let (old_w, old_h) = (self.bitmap.width, self.bitmap.height);
+            let mut grown = Bitmap::new(w.max(old_w), h.max(old_h), BACKGROUND);
+            let data = self.bitmap.read_region(0, 0, old_w, old_h);
+            grown.write_region(0, 0, old_w, old_h, &data);
+            self.replace_bitmap(grown, true);
+            self.sync_size_inputs(window, cx);
+        }
+
+        // place it at the top-left corner of the visible area, kept inside the canvas
+        let (ox, oy) = self.canvas_origin();
+        let zoom = self.zoom();
+        let x = ((-ox / zoom).ceil() as i32).clamp(0, (self.bitmap.width - w) as i32);
+        let y = ((-oy / zoom).ceil() as i32).clamp(0, (self.bitmap.height - h) as i32);
+
+        self.tool = Tool::Select;
+        self.selection = Some(Selection { x, y, w: w as i32, h: h as i32, floating: Some(pasted) });
+        self.clamp_scroll();
+        self.mark_dirty();
+        cx.notify();
     }
 
     fn select_mouse_down(&mut self, p: (i32, i32)) {
@@ -1320,11 +1401,14 @@ impl Application {
             return;
         }
         let key = &event.keystroke;
-        if key.modifiers.control {
+        println!("key:{:?}", key);
+        if key.modifiers.platform {
             match key.key.as_str() {
                 "z" if key.modifiers.shift => self.redo(window, cx),
                 "z" => self.undo(window, cx),
                 "y" => self.redo(window, cx),
+                "c" => self.copy_selection(cx),
+                "v" => self.paste_image(window, cx),
                 "s" => self.save_png(cx),
                 "o" => self.open_png(window, cx),
                 _ => {}
