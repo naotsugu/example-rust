@@ -8,7 +8,7 @@ use gpui_kit::assets::Assets;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle, ToggleVariants};
 use gpui_kit::component::{ActiveTheme, IconName, Sizable};
 
 // palette (column-major pairs: top row, bottom row)
@@ -1109,12 +1109,13 @@ impl Application {
         if selected { base.border_2() } else { base.border_1() }
     }
 
-    fn tool_button(&self, label: &'static str, tool: Tool, cx: &mut Context<Self>) -> Div {
-        self.button_base(label, self.tool == tool, cx)
-            .w(px(BUTTON_WIDTH))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+    fn tool_button(&self, label: &'static str, tool: Tool, cx: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(BUTTON_WIDTH)).child(
+            Toggle::new(label)
+                .label(label)
+                .xsmall()
+                .checked(self.tool == tool)
+                .on_click(cx.listener(move |this, _checked, _, cx| {
                     // leaving the selection tool flattens the selection
                     if tool != Tool::Select {
                         this.commit_selection();
@@ -1122,8 +1123,8 @@ impl Application {
                     this.tool = tool;
                     this.mark_dirty();
                     cx.notify();
-                }),
-            )
+                })),
+        )
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
