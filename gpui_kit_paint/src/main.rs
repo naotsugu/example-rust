@@ -12,6 +12,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::marker::{Marker, MarkerContent, MarkerVariant};
 
 // palette (column-major pairs: top row, bottom row)
 const PALETTE: [u32; 20] = [
@@ -29,8 +30,7 @@ const PALETTE: [u32; 20] = [
 
 const SIDEBAR_WIDTH: f32 = 112.;
 const SWATCH_SIZE: f32 = 16.;
-const BUTTON_WIDTH: f32 = 44.;
-const FOOTER_HEIGHT: f32 = 36.;
+const FOOTER_HEIGHT: f32 = 32.;
 
 // minimum gap between the canvas and the viewport edge when scrolled to an end
 const CANVAS_MARGIN: f32 = 12.;
@@ -46,6 +46,123 @@ const MAX_HISTORY: usize = 100;
 const BACKGROUND: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
 // color of the area around the canvas
 const SURROUND: [u8; 3] = [0xc8, 0xc8, 0xc8];
+
+
+type Rect = (i32, i32, i32, i32); // x0, y0, x1, y1 (end-exclusive)
+
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))
+}
+
+// center of a canvas pixel in continuous coordinates
+fn pixel_center(p: (i32, i32)) -> (f32, f32) {
+    (p.0 as f32 + 0.5, p.1 as f32 + 0.5)
+}
+
+/// Antialiasing coverage of the current stroke or shape (0..=255 per pixel).
+struct Coverage {
+    width: usize,
+    height: usize,
+    data: Vec<u8>,
+}
+
+impl Coverage {
+    fn new(width: usize, height: usize) -> Self {
+        Self { width, height, data: vec![0; width * height] }
+    }
+
+    // clip a floating-point bounding box to the mask
+    fn clip(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
+        (
+            (x0.floor() as i32).max(0),
+            (y0.floor() as i32).max(0),
+            (x1.ceil() as i32).min(self.width as i32),
+            (y1.ceil() as i32).min(self.height as i32),
+        )
+    }
+
+    fn clear_rect(&mut self, rect: Rect) {
+        let x0 = rect.0.max(0) as usize;
+        let y0 = rect.1.max(0) as usize;
+        let x1 = rect.2.clamp(0, self.width as i32) as usize;
+        let y1 = rect.3.clamp(0, self.height as i32) as usize;
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        for y in y0..y1 {
+            self.data[y * self.width + x0..y * self.width + x1].fill(0);
+        }
+    }
+
+    // keep the larger coverage when shapes overlap, so overlaps never get darker
+    fn put(&mut self, x: i32, y: i32, value: f32) {
+        let v = (value.clamp(0., 1.) * 255.).round() as u8;
+        let i = y as usize * self.width + x as usize;
+        if v > self.data[i] {
+            self.data[i] = v;
+        }
+    }
+
+    /// A line segment with round caps; the line width is `2 * radius`.
+    fn add_capsule(&mut self, a: (f32, f32), b: (f32, f32), radius: f32) -> Rect {
+        let rect = self.clip(
+            a.0.min(b.0) - radius - 1.,
+            a.1.min(b.1) - radius - 1.,
+            a.0.max(b.0) + radius + 1.,
+            a.1.max(b.1) + radius + 1.,
+        );
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dx * dx + dy * dy;
+        for y in rect.1..rect.3 {
+            for x in rect.0..rect.2 {
+                let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                // distance from the pixel center to the segment
+                let t = if len2 > 0. {
+                    (((fx - a.0) * dx + (fy - a.1) * dy) / len2).clamp(0., 1.)
+                } else {
+                    0.
+                };
+                let (qx, qy) = (a.0 + t * dx, a.1 + t * dy);
+                let d = ((fx - qx).powi(2) + (fy - qy).powi(2)).sqrt();
+                self.put(x, y, radius + 0.5 - d);
+            }
+        }
+        rect
+    }
+
+    /// Ellipse outline, drawn as a chain of short capsules.
+    fn add_ellipse_outline(&mut self, cx: f32, cy: f32, a: f32, b: f32, radius: f32) -> Rect {
+        let steps = ((a.max(b) * 6.) as usize).max(24);
+        let mut prev = (cx + a, cy);
+        let mut rect: Option<Rect> = None;
+        for i in 1..=steps {
+            let theta = i as f32 / steps as f32 * std::f32::consts::TAU;
+            let p = (cx + a * theta.cos(), cy + b * theta.sin());
+            let r = self.add_capsule(prev, p, radius);
+            rect = Some(rect.map_or(r, |u| union_rect(u, r)));
+            prev = p;
+        }
+        rect.unwrap_or((0, 0, 0, 0))
+    }
+
+    /// Filled ellipse; the edge coverage comes from an approximate distance to the boundary.
+    fn add_ellipse_fill(&mut self, cx: f32, cy: f32, a: f32, b: f32) -> Rect {
+        let (a, b) = (a.max(0.5), b.max(0.5));
+        let rect = self.clip(cx - a - 1., cy - b - 1., cx + a + 1., cy + b + 1.);
+        for y in rect.1..rect.3 {
+            for x in rect.0..rect.2 {
+                let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                let f = dx * dx / (a * a) + dy * dy / (b * b);
+                let (gx, gy) = (dx / (a * a), dy / (b * b));
+                let grad = 2. * (gx * gx + gy * gy).sqrt();
+                // signed distance (negative inside)
+                let d = if grad > 1e-6 { (f - 1.) / grad } else { -1.0e3 };
+                self.put(x, y, 0.5 - d);
+            }
+        }
+        rect
+    }
+}
 
 /// An opaque RGBA bitmap: the source of truth of the document.
 /// It tracks the bounding box of modified pixels so that history entries stay small.
@@ -273,6 +390,32 @@ impl Bitmap {
         self.mark(x0, y0, x1, y1);
     }
 
+    /// Set the pixels of `rect` to the backup mixed with `color` by the coverage.
+    fn composite(&mut self, backup: &Bitmap, cov: &Coverage, color: [u8; 4], rect: Rect) {
+        let x0 = rect.0.max(0);
+        let y0 = rect.1.max(0);
+        let x1 = rect.2.min(self.width as i32);
+        let y1 = rect.3.min(self.height as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let mix = |from: u8, to: u8, c: u32| ((from as u32 * (255 - c) + to as u32 * c + 127) / 255) as u8;
+        for y in y0..y1 {
+            let row = y as usize * self.width;
+            for x in x0..x1 {
+                let i = row + x as usize;
+                let c = cov.data[i] as u32;
+                let b = backup.pixels[i];
+                self.pixels[i] = match c {
+                    0 => b,
+                    255 => color,
+                    _ => [mix(b[0], color[0], c), mix(b[1], color[1], c), mix(b[2], color[2], c), 0xff],
+                };
+            }
+        }
+        self.mark(x0, y0, x1, y1);
+    }
+
     // history helpers: these do not touch the dirty area
     fn read_region(&self, x: usize, y: usize, w: usize, h: usize) -> Vec<[u8; 4]> {
         let mut out = Vec::with_capacity(w * h);
@@ -289,6 +432,7 @@ impl Bitmap {
             self.pixels[row + x..row + x + w].copy_from_slice(&data[i * w..(i + 1) * w]);
         }
     }
+
 }
 
 /// One undo step. A patch stores only the changed rectangle.
@@ -357,6 +501,9 @@ pub struct Application {
     last_pos: (i32, i32),
     brush_size: i32,
     shape_filled: bool,
+    // anti-aliased drawing on/off, and the coverage of the stroke in progress (AA only)
+    antialias: bool,
+    coverage: Option<Coverage>,
     // shape preview: the bitmap before the shape and the area the preview covers
     shape_backup: Option<Bitmap>,
     shape_bounds: Option<(i32, i32, i32, i32)>,
@@ -465,6 +612,8 @@ impl Application {
             last_pos: (0, 0),
             brush_size: 1,
             shape_filled: false,
+            antialias: false,
+            coverage: None,
             shape_backup: None,
             shape_bounds: None,
             selection: None,
@@ -846,20 +995,74 @@ impl Application {
         // erase the previous preview
         if let Some(bounds) = self.shape_bounds {
             self.bitmap.restore_region(backup, bounds);
+            if let Some(cov) = self.coverage.as_mut() {
+                cov.clear_rect(bounds);
+            }
         }
 
         let color = to_rgba8(self.current_color);
         let size = self.brush_size;
         let (x0, x1) = (start.0.min(end.0), start.0.max(end.0));
         let (y0, y1) = (start.1.min(end.1), start.1.max(end.1));
-        match self.tool {
-            Tool::Line => self.bitmap.line(start, end, size, color),
-            Tool::Rect => self.bitmap.rect(x0, y0, x1, y1, size, self.shape_filled, color),
-            Tool::Oval => self.bitmap.ellipse(x0, y0, x1, y1, size, self.shape_filled, color),
-            _ => {}
+        if let Some(cov) = self.coverage.as_mut() {
+            // anti-aliased: build the coverage, then composite it over the original pixels
+            let r = size as f32 / 2.;
+            let touched: Option<Rect> = match self.tool {
+                Tool::Line => Some(cov.add_capsule(pixel_center(start), pixel_center(end), r)),
+                // a filled rectangle is pixel-aligned, so it needs no smoothing
+                Tool::Rect if self.shape_filled => {
+                    self.bitmap.rect(x0, y0, x1, y1, size, true, color);
+                    None
+                }
+                Tool::Rect => {
+                    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+                    let mut rect = cov.add_capsule(pixel_center(corners[0]), pixel_center(corners[1]), r);
+                    for i in 1..4 {
+                        let side = cov.add_capsule(
+                            pixel_center(corners[i]),
+                            pixel_center(corners[(i + 1) % 4]),
+                            r,
+                        );
+                        rect = union_rect(rect, side);
+                    }
+                    Some(rect)
+                }
+                Tool::Oval => {
+                    let cx = (x0 + x1) as f32 / 2. + 0.5;
+                    let cy = (y0 + y1) as f32 / 2. + 0.5;
+                    let a = (x1 - x0) as f32 / 2.;
+                    let b = (y1 - y0) as f32 / 2.;
+                    if self.shape_filled {
+                        Some(cov.add_ellipse_fill(cx, cy, a + 0.5, b + 0.5))
+                    } else {
+                        Some(cov.add_ellipse_outline(cx, cy, a, b, r))
+                    }
+                }
+                _ => None,
+            };
+            if let Some(rect) = touched {
+                self.bitmap.composite(backup, cov, color, rect);
+            }
+        } else {
+            match self.tool {
+                Tool::Line => self.bitmap.line(start, end, size, color),
+                Tool::Rect => self.bitmap.rect(x0, y0, x1, y1, size, self.shape_filled, color),
+                Tool::Oval => self.bitmap.ellipse(x0, y0, x1, y1, size, self.shape_filled, color),
+                _ => {}
+            }
         }
         // the preview may extend beyond the corners by the brush size
         self.shape_bounds = Some((x0 - size, y0 - size, x1 + size + 1, y1 + size + 1));
+    }
+
+    // add a round-capped segment to the stroke's coverage and composite it over the saved pixels
+    fn aa_segment(&mut self, from: (i32, i32), to: (i32, i32), color: [u8; 4]) {
+        let (Some(backup), Some(cov)) = (self.shape_backup.as_ref(), self.coverage.as_mut()) else {
+            return;
+        };
+        let radius = self.brush_size as f32 / 2.;
+        let rect = cov.add_capsule(pixel_center(from), pixel_center(to), radius);
+        self.bitmap.composite(backup, cov, color, rect);
     }
 
     // -- canvas size ---------------------------------------------------------
@@ -981,7 +1184,14 @@ impl Application {
                 self.drag = Drag::Draw;
                 self.last_pos = p;
                 let color = self.tool_color();
-                self.bitmap.stamp(p.0, p.1, self.brush_size, color);
+                if self.antialias {
+                    // keep the pixels from before the stroke; the stroke is composited over them
+                    self.shape_backup = Some(self.bitmap.clone());
+                    self.coverage = Some(Coverage::new(self.bitmap.width, self.bitmap.height));
+                    self.aa_segment(p, p, color);
+                } else {
+                    self.bitmap.stamp(p.0, p.1, self.brush_size, color);
+                }
             }
             Tool::Fill => {
                 let color = to_rgba8(self.current_color);
@@ -1003,6 +1213,9 @@ impl Application {
                 self.drag = Drag::Shape { start: p };
                 self.last_pos = p;
                 self.shape_backup = Some(self.bitmap.clone());
+                self.coverage = self
+                    .antialias
+                    .then(|| Coverage::new(self.bitmap.width, self.bitmap.height));
                 self.shape_bounds = None;
                 self.draw_shape(p, p);
             }
@@ -1029,7 +1242,11 @@ impl Application {
             Drag::Draw => {
                 if p != self.last_pos {
                     let color = self.tool_color();
-                    self.bitmap.line(self.last_pos, p, self.brush_size, color);
+                    if self.coverage.is_some() {
+                        self.aa_segment(self.last_pos, p, color);
+                    } else {
+                        self.bitmap.line(self.last_pos, p, self.brush_size, color);
+                    }
                     self.last_pos = p;
                     self.mark_dirty();
                     changed = true;
@@ -1064,10 +1281,15 @@ impl Application {
 
     fn handle_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Draw => self.record_history(),
+            Drag::Draw => {
+                self.shape_backup = None;
+                self.coverage = None;
+                self.record_history();
+            }
             Drag::Shape { .. } => {
                 self.shape_backup = None;
                 self.shape_bounds = None;
+                self.coverage = None;
                 self.record_history();
             }
             Drag::SelectNew { .. } => {
@@ -1245,6 +1467,16 @@ impl Application {
                 this.shape_filled = *checked; cx.notify();
             }));
 
+        // anti-aliasing on/off
+        let aa_toggle = Toggle::new("antialias")
+            .label("Smooth")
+            .small()
+            .checked(self.antialias)
+            .on_click(cx.listener(|this, checked, _, cx| {
+                this.antialias = *checked;
+                cx.notify();
+            }));
+
         // brush size input
         let brush_size = div()
             .w_full()
@@ -1299,8 +1531,11 @@ impl Application {
             .border_r_1()
             .border_color(cx.theme().sidebar_border)
             .child(files)
+            .child(div().w_full().h(px(1.)).bg(cx.theme().ring))
             .child(tools)
+            .child(div().w_full().h(px(1.)).bg(cx.theme().ring))
             .child(filled_button)
+            .child(aa_toggle)
             .child(brush_size)
             .child(current)
             .child(grid)
