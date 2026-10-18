@@ -8,7 +8,7 @@ use gpui_kit::assets::Assets;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
-use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle, ToggleVariants};
+use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
 use gpui_kit::component::{ActiveTheme, IconName, Sizable};
 
 // palette (column-major pairs: top row, bottom row)
@@ -557,6 +557,22 @@ impl Application {
         self.scroll.1 = (content_h - self.bitmap.height as f32 * new_zoom) / 2. - (anchor.1 - cy * new_zoom);
         self.clamp_scroll();
         self.mark_dirty();
+    }
+
+    // zoom so that the whole canvas fits into the viewport
+    fn fit_to_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let avail_w = f32::from(self.viewport_size.width) - CANVAS_MARGIN * 2.;
+        let avail_h = f32::from(self.viewport_size.height) - CANVAS_MARGIN * 2.;
+        let zoom = (avail_w / self.bitmap.width as f32).min(avail_h / self.bitmap.height as f32);
+        // round down to a whole percent so that the canvas is never cut off
+        let percent = (zoom * 100.).floor().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT);
+        self.apply_zoom(percent);
+        self.scroll = (0., 0.);
+        self.clamp_scroll();
+        // keep the slider thumb in sync
+        self.zoom_slider
+            .update(cx, |state, cx| state.set_value(percent, window, cx));
+        cx.notify();
     }
 
     // convert a window position into canvas pixel coordinates (may be outside the bitmap)
@@ -1248,6 +1264,12 @@ impl Application {
             cx.listener(|this, _, window, cx| this.apply_resize(window, cx)),
         );
 
+        let fit_button = Button::new("btn-fit")
+            .xsmall()
+            .icon(IconName::Maximize)
+            .tooltip("Fit to window")
+            .on_click(cx.listener(|this, _, window, cx| this.fit_to_window(window, cx)));
+
         div()
             .w_full()
             .h(px(FOOTER_HEIGHT))
@@ -1273,6 +1295,7 @@ impl Application {
             // zoom
             .child(div().text_xs().child("Zoom"))
             .child(Slider::new(&self.zoom_slider).w(px(140.)))
+            .child(fit_button)
             .child(
                 div()
                     .w(px(44.))
