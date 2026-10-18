@@ -4,12 +4,14 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use gpui_kit::*;
-use gpui_kit::assets::Assets;
+use gpui_kit::assets::{AllAssets, IconName};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
-use gpui_kit::component::{ActiveTheme, IconName, Sizable};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::dialog::DialogFooter;
 
 // palette (column-major pairs: top row, bottom row)
 const PALETTE: [u32; 20] = [
@@ -869,21 +871,21 @@ impl Application {
         self.height_input.update(cx, |state, cx| state.set_value(height, window, cx));
     }
 
-    fn apply_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn apply_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.commit_selection();
 
         let width = self.width_input.read(cx).value().parse::<usize>().ok();
         let height = self.height_input.read(cx).value().parse::<usize>().ok();
         let (Some(width), Some(height)) = (width, height) else {
             show_error("Enter the width and height as whole numbers.");
-            return;
+            return false;
         };
         if width == 0 || height == 0 || width > MAX_CANVAS_SIZE || height > MAX_CANVAS_SIZE {
             show_error(&format!("The size must be between 1 and {MAX_CANVAS_SIZE}."));
-            return;
+            return false;
         }
         if width == self.bitmap.width && height == self.bitmap.height {
-            return;
+            return false;
         }
 
         // keep the overlapping part anchored at the top-left, fill the rest with the background
@@ -895,6 +897,73 @@ impl Application {
 
         self.replace_bitmap(new_bitmap, true);
         self.after_history_change(window, cx);
+        true
+    }
+
+    fn open_resize_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // show the current size in the inputs
+        self.sync_size_inputs(window, cx);
+
+        // the dialog builder may run again, so it only captures cheap handles
+        let app = cx.entity();
+        let width_input = self.width_input.clone();
+        let height_input = self.height_input.clone();
+        let initial_focus = Cell::new(true);
+
+        window.open_dialog(cx, move |dialog, window, cx| {
+            // focus the width field once, when the dialog opens
+            if initial_focus.replace(false) {
+                width_input.focus_handle(cx).focus(window, cx);
+            }
+
+            let row = |label: &'static str, input: &Entity<InputState>| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(div().w(px(56.)).text_sm().child(label))
+                    .child(div().flex_1().child(NumberInput::new(input)))
+            };
+
+            let app = app.clone();
+            dialog
+                .title("Resize canvas")
+                .w(px(320.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(row("Width", &width_input))
+                        .child(row("Height", &height_input))
+                        .child(div().text_xs().child(format!(
+                            "1 to {MAX_CANVAS_SIZE} px. The image stays anchored at the top-left."
+                        ))),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("resize-ok")
+                                .primary()
+                                .label("OK")
+                                .on_click(move |_, window, cx| {
+                                    // close only when the size was valid
+                                    let applied = app.update(cx, |this, cx| this.apply_resize(window, cx));
+                                    if applied {
+                                        window.close_dialog(cx);
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("resize-cancel")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        ),
+                )
+        });
     }
 
     // -- input handlers ------------------------------------------------------
@@ -1109,27 +1178,12 @@ impl Application {
 
     // -- UI ------------------------------------------------------------------
 
-    fn button_base(&self, label: impl Into<SharedString>, selected: bool, cx: &mut Context<Self>) -> Div {
-        let border: Hsla = if selected { rgb(0x0078d7).into() } else { cx.theme().sidebar_border };
-        let base = div()
-            .w_full()
-            .h(px(24.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_xs()
-            .border_color(border)
-            .cursor(CursorStyle::PointingHand)
-            .hover(|s| s.opacity(0.7))
-            .child(label.into());
-        if selected { base.border_2() } else { base.border_1() }
-    }
-
-    fn tool_button(&self, label: &'static str, tool: Tool, cx: &mut Context<Self>) -> impl IntoElement {
-        div().w(px(BUTTON_WIDTH)).child(
+    fn tool_button(&self, label: &'static str, icon: impl Into<Icon>, tool: Tool, cx: &mut Context<Self>) -> impl IntoElement {
+        div().child(
             Toggle::new(label)
-                .label(label)
-                .xsmall()
+                .tooltip(label)
+                .icon(icon)
+                .small()
                 .checked(self.tool == tool)
                 .on_click(cx.listener(move |this, _checked, _, cx| {
                     // leaving the selection tool flattens the selection
@@ -1175,18 +1229,18 @@ impl Application {
             .flex()
             .flex_row()
             .flex_wrap()
-            .gap(px(4.))
-            .child(self.tool_button("Pencil", Tool::Pencil, cx))
-            .child(self.tool_button("Eraser", Tool::Eraser, cx))
-            .child(self.tool_button("Fill", Tool::Fill, cx))
-            .child(self.tool_button("Pick", Tool::Picker, cx))
-            .child(self.tool_button("Line", Tool::Line, cx))
-            .child(self.tool_button("Rect", Tool::Rect, cx))
-            .child(self.tool_button("Oval", Tool::Oval, cx))
-            .child(self.tool_button("Select", Tool::Select, cx));
+            .gap(px(2.))
+            .child(self.tool_button("Pencil", IconName::Pencil, Tool::Pencil, cx))
+            .child(self.tool_button("Eraser", IconName::Eraser, Tool::Eraser, cx))
+            .child(self.tool_button("Fill", IconName::PaintBucket, Tool::Fill, cx))
+            .child(self.tool_button("Pick", IconName::Pipette, Tool::Picker, cx))
+            .child(self.tool_button("Line", IconName::Slash, Tool::Line, cx))
+            .child(self.tool_button("Rect", IconName::Square, Tool::Rect, cx))
+            .child(self.tool_button("Oval", IconName::Ellipse, Tool::Oval, cx))
+            .child(self.tool_button("Select", IconName::SquareDashedMousePointer, Tool::Select, cx));
 
         // rectangle / ellipse style
-        let filled_button = Toggle::new("filled").label("Filled").xsmall().checked(self.shape_filled)
+        let filled_button = Toggle::new("filled").label("Filled").small().checked(self.shape_filled)
             .on_click(cx.listener(|this, checked, _, cx| {
                 this.shape_filled = *checked; cx.notify();
             }));
@@ -1259,10 +1313,11 @@ impl Application {
             .map(|(x, y)| format!("{}, {}", x, y))
             .unwrap_or_default();
 
-        let resize_button = self.button_base("Resize", false, cx).w(px(56.)).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, window, cx| this.apply_resize(window, cx)),
-        );
+        let resize_button = Button::new("btn-resize")
+            .xsmall()
+            .icon(IconName::ImageUpscale)
+            .tooltip("Resize…")
+            .on_click(cx.listener(|this, _, window, cx| this.open_resize_dialog(window, cx)));
 
         let fit_button = Button::new("btn-fit")
             .xsmall()
@@ -1287,10 +1342,6 @@ impl Application {
             .child(div().w(px(80.)).text_xs().child(cursor_text))
             .child(div().flex_1())
             // canvas size
-            .child(div().text_xs().child("W"))
-            .child(div().w(px(72.)).child(NumberInput::new(&self.width_input).xsmall()))
-            .child(div().text_xs().child("H"))
-            .child(div().w(px(72.)).child(NumberInput::new(&self.height_input).xsmall()))
             .child(resize_button)
             // zoom
             .child(div().text_xs().child("Zoom"))
@@ -1401,7 +1452,7 @@ fn show_error(message: &str) {
 
 fn main() {
 
-    application().with_assets(Assets).run(move |cx| {
+    application().with_assets(AllAssets).run(move |cx| {
 
         gpui_kit::init(cx);
 
