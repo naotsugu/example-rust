@@ -499,6 +499,8 @@ pub struct Application {
     committed: Bitmap,
     undo_stack: Vec<Edit>,
     redo_stack: Vec<Edit>,
+    // true when the document has changes that were not saved yet
+    modified: bool,
     tool: Tool,
     drag: Drag,
     // last pixel touched while dragging (canvas coordinates)
@@ -606,11 +608,19 @@ impl Application {
 
         let bitmap = Bitmap::new(600, 500, BACKGROUND);
 
+        // ask about unsaved changes when the window is about to close (X button, Alt+F4, ...);
+        // returning false from the callback keeps the window open
+        let this = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |_window, cx| {
+            this.update(cx, |app, cx| app.confirm_discard(cx)).unwrap_or(true)
+        });
+
         Self {
             committed: bitmap.clone(),
             bitmap,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            modified: false,
             tool: Tool::Pencil,
             drag: Drag::None,
             last_pos: (0, 0),
@@ -855,6 +865,7 @@ impl Application {
     fn push_edit(&mut self, edit: Edit) {
         self.undo_stack.push(edit);
         self.redo_stack.clear();
+        self.modified = true;
         if self.undo_stack.len() > MAX_HISTORY {
             self.undo_stack.remove(0);
         }
@@ -887,6 +898,7 @@ impl Application {
             }
         }
         self.bitmap.dirty = None;
+        self.modified = true;
     }
 
     fn after_history_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -927,6 +939,7 @@ impl Application {
             self.committed = new_bitmap.clone();
             self.undo_stack.clear();
             self.redo_stack.clear();
+            self.modified = false;
         }
         self.bitmap = new_bitmap;
     }
@@ -1444,7 +1457,7 @@ impl Application {
                 "y" => self.redo(window, cx),
                 "c" => self.copy_selection(cx),
                 "v" => self.paste_image(window, cx),
-                "s" => self.save_png(cx),
+                "s" => { self.save_png(cx); }
                 "o" => self.open_png(window, cx),
                 _ => {}
             }
@@ -1457,7 +1470,8 @@ impl Application {
 
     // -- files ---------------------------------------------------------------
 
-    fn save_png(&mut self, cx: &mut Context<Self>) {
+    // returns true when the image was saved
+    fn save_png(&mut self, cx: &mut Context<Self>) -> bool {
         // make sure a moved selection is part of the saved image
         self.commit_selection();
         self.drag = Drag::None;
@@ -1467,20 +1481,23 @@ impl Application {
             .set_file_name("drawing.png")
             .save_file()
         else {
-            return; // canceled
+            return false; // canceled
         };
         let path = if path.extension().is_none() { path.with_extension("png") } else { path };
 
         let data: Vec<u8> = self.bitmap.pixels.iter().flatten().copied().collect();
         let Some(img) = image::RgbaImage::from_raw(self.bitmap.width as u32, self.bitmap.height as u32, data) else {
             show_error("Failed to build the image.");
-            return;
+            return false;
         };
         if let Err(e) = img.save_with_format(&path, image::ImageFormat::Png) {
             show_error(&format!("Failed to save the image: {e}"));
+            return false;
         }
+        self.modified = false;
         self.mark_dirty();
         cx.notify();
+        true
     }
 
     fn open_png(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1493,10 +1510,33 @@ impl Application {
         self.load_image(&path, window, cx);
     }
 
-    // open an image file as a new document (used by the Open dialog and by file drops)
-    fn load_image(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+    // Ask what to do with unsaved changes before the document is replaced.
+    // Returns true when it is OK to continue (nothing to save, saved, or discarded).
+    fn confirm_discard(&mut self, cx: &mut Context<Self>) -> bool {
+        // flatten a floating selection first, so that it counts as a change
         self.commit_selection();
         self.drag = Drag::None;
+        if !self.modified {
+            return true;
+        }
+        let answer = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("min-paint")
+            .set_description("The image has unsaved changes. Save them first?")
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .show();
+        match answer {
+            rfd::MessageDialogResult::Yes => self.save_png(cx), // a canceled save aborts too
+            rfd::MessageDialogResult::No => true,
+            _ => false,
+        }
+    }
+
+    // open an image file as a new document (used by the Open dialog and by file drops)
+    fn load_image(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.confirm_discard(cx) {
+            return;
+        }
 
         let img = match image::open(path) {
             Ok(img) => img.to_rgba8(),
@@ -1552,7 +1592,7 @@ impl Application {
             .on_click(cx.listener(|this, _, window, cx| this.open_png(window, cx)));
         let save_button = Button::new("btn-save")
             .ghost().small().icon(IconName::HardDrive).tooltip("Save (Ctrl+S)")
-            .on_click(cx.listener(|this, _, _, cx| this.save_png(cx)));
+            .on_click(cx.listener(|this, _, _, cx| { this.save_png(cx); }));
         let undo_button = Button::new("btn-undo")
             .ghost().small().icon(IconName::Undo2).tooltip("Undo (Ctrl+Z)")
             .on_click(cx.listener(|this, _, window, cx| this.undo(window, cx)));
