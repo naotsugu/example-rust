@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::path::Path;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -1412,6 +1413,15 @@ impl Application {
         cx.notify();
     }
 
+    // a file was dropped from the OS onto the viewport
+    fn handle_drop(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        // open the first dropped file; the others are ignored
+        if let Some(path) = paths.paths().first() {
+            self.load_image(path, window, cx);
+            self.focus_canvas(window, cx);
+        }
+    }
+
     fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
         let delta = event.delta.pixel_delta(px(20.));
         self.scroll.0 -= f32::from(delta.x);
@@ -1474,16 +1484,21 @@ impl Application {
     }
 
     fn open_png(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_selection();
-        self.drag = Drag::None;
-
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG image", &["png"])
             .pick_file()
         else {
             return; // canceled
         };
-        let img = match image::open(&path) {
+        self.load_image(&path, window, cx);
+    }
+
+    // open an image file as a new document (used by the Open dialog and by file drops)
+    fn load_image(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_selection();
+        self.drag = Drag::None;
+
+        let img = match image::open(path) {
             Ok(img) => img.to_rgba8(),
             Err(e) => {
                 show_error(&format!("Failed to open the image: {e}"));
@@ -1754,6 +1769,7 @@ impl Render for Application {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .on_scroll_wheel(cx.listener(Self::handle_scroll_wheel))
+            .on_drop(cx.listener(Self::handle_drop))
             // the image is generated at device resolution, so it is shown 1:1
             .children(image.map(|image| {
                 img(ImageSource::Render(image))
