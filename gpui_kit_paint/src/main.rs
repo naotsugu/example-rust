@@ -780,14 +780,19 @@ impl Application {
         )
     }
 
-    // change the zoom while keeping the canvas point at the viewport center in place
+    // zoom around the viewport center (used by the slider)
     fn apply_zoom(&mut self, new_percent: f32) {
-        let new_percent = new_percent.clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT);
         let anchor = (
             f32::from(self.viewport_size.width) / 2.,
             f32::from(self.viewport_size.height) / 2.,
         );
+        self.apply_zoom_at(new_percent, anchor);
+    }
 
+    // change the zoom while keeping the canvas point under `anchor` (viewport coordinates,
+    // logical pixels) in place
+    fn apply_zoom_at(&mut self, new_percent: f32, anchor: (f32, f32)) {
+        let new_percent = new_percent.clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT);
         // the canvas point (in canvas pixels) currently under the anchor
         let old_zoom = self.zoom();
         let (ox, oy) = self.canvas_origin();
@@ -1515,8 +1520,30 @@ impl Application {
         }
     }
 
-    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+
         let delta = event.delta.pixel_delta(px(20.));
+
+        // Ctrl + wheel: zoom around the mouse pointer instead of scrolling
+        if event.modifiers.secondary() {
+            let origin = self.viewport_origin.get();
+            let anchor = (
+                f32::from(event.position.x - origin.x),
+                f32::from(event.position.y - origin.y),
+            );
+            // exponential steps feel the same at every zoom level (one wheel notch is about 10%),
+            // and smooth touchpad deltas work too
+            let percent = self.zoom_percent * (f32::from(delta.y) * 0.005).exp();
+            self.apply_zoom_at(percent, anchor);
+
+            // keep the slider thumb in sync
+            let percent = self.zoom_percent;
+            self.zoom_slider
+                .update(cx, |state, cx| state.set_value(percent, window, cx));
+            cx.notify();
+            return;
+        }
+        
         self.scroll.0 -= f32::from(delta.x);
         self.scroll.1 -= f32::from(delta.y);
         self.clamp_scroll();
@@ -1712,20 +1739,30 @@ impl Application {
             );
 
         // rectangle / ellipse style
-        let filled_button = Toggle::new("filled").label("Filled").small().checked(self.shape_filled)
+        let filled_toggle = Toggle::new("filled").tooltip("Filled").small()
+            .icon(IconName::Droplets).checked(self.shape_filled)
             .on_click(cx.listener(|this, checked, _, cx| {
                 this.shape_filled = *checked; cx.notify();
             }));
 
         // anti-aliasing on/off
         let aa_toggle = Toggle::new("antialias")
-            .label("Smooth")
-            .small()
+            .tooltip("Anti-alias")
+            .small().icon(IconName::ALargeSmall)
             .checked(self.antialias)
             .on_click(cx.listener(|this, checked, _, cx| {
                 this.antialias = *checked;
                 cx.notify();
             }));
+
+        let modes = div()
+            .w_full()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(2.))
+            .child(filled_toggle)
+            .child(aa_toggle);
 
         // brush size select
         let brush_size = div().w_full()
@@ -1783,8 +1820,7 @@ impl Application {
             .child(div().w_full().h(px(1.)).bg(cx.theme().ring))
             .child(tools)
             .child(div().w_full().h(px(1.)).bg(cx.theme().ring))
-            .child(filled_button)
-            .child(aa_toggle)
+            .child(modes)
             .child(brush_size)
             .child(current)
             .child(grid)
