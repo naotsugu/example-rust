@@ -1570,7 +1570,11 @@ impl Application {
             .child(self.tool_button("Line", IconName::Slash, Tool::Line, cx))
             .child(self.tool_button("Rect", IconName::Square, Tool::Rectangle, cx))
             .child(self.tool_button("Oval", IconName::Ellipse, Tool::Oval, cx))
-            .child(self.tool_button("Select", IconName::SquareDashedMousePointer, Tool::Select, cx));
+            .child(self.tool_button("Select", IconName::SquareDashedMousePointer, Tool::Select, cx))
+            .child(Button::new("btn-resize")
+                .small().icon(IconName::ImageUpscale).tooltip("Resize…").ghost()
+                .on_click(cx.listener(|this, _, window, cx| this.open_resize_dialog(window, cx)))
+            );
 
         // rectangle / ellipse style
         let filled_button = Toggle::new("filled").label("Filled").small().checked(self.shape_filled)
@@ -1658,11 +1662,13 @@ impl Application {
             .map(|(x, y)| format!("{}, {}", x, y))
             .unwrap_or_default();
 
-        let resize_button = Button::new("btn-resize")
-            .xsmall()
-            .icon(IconName::ImageUpscale)
-            .tooltip("Resize…")
-            .on_click(cx.listener(|this, _, window, cx| this.open_resize_dialog(window, cx)));
+        // size of the selection (empty when nothing is selected)
+        let selection_text = self
+            .selection
+            .as_ref()
+            .map(|s| format!("{} × {} px", s.w, s.h))
+            .unwrap_or_default();
+
 
         let fit_button = Button::new("btn-fit")
             .xsmall()
@@ -1682,12 +1688,11 @@ impl Application {
             .bg(cx.theme().secondary)
             .border_t_1()
             .border_color(cx.theme().sidebar_border)
-            // image size and cursor position
+            // image size and cursor position, selection size
             .child(div().w(px(110.)).text_xs().child(size_text))
             .child(div().w(px(80.)).text_xs().child(cursor_text))
+            .child(div().w(px(110.)).text_xs().child(selection_text))
             .child(div().flex_1())
-            // canvas size
-            .child(resize_button)
             // zoom
             .child(div().text_xs().child("Zoom"))
             .child(Slider::new(&self.zoom_slider).w(px(140.)))
