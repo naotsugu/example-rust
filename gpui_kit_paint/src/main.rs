@@ -305,14 +305,22 @@ impl Bitmap {
     }
 
     /// Scanline flood fill (4-connected) that replaces the region of the clicked color.
-    fn flood_fill(&mut self, x: i32, y: i32, color: [u8; 4]) {
+    /// With `smooth_edges`, the antialiased pixels around the region are recolored too.
+    fn flood_fill(&mut self, x: i32, y: i32, color: [u8; 4], smooth_edges: bool) {
         let Some(target) = self.get(x, y) else { return };
         if target == color {
             return;
         }
+
+        let w = self.width;
+        // `filled` marks the region; its pixels are painted after the search finishes,
+        // so all reads below still see the original colors
+        let mut filled = vec![false; w * self.height];
+        let mut spans: Vec<(i32, i32, i32)> = Vec::new(); // (y, left, right), inclusive
+
         let mut stack = vec![(x, y)];
         while let Some((x, y)) = stack.pop() {
-            if self.get(x, y) != Some(target) {
+            if self.get(x, y) != Some(target) || filled[y as usize * w + x as usize] {
                 continue;
             }
             // extend the span to the left and right
@@ -325,13 +333,15 @@ impl Bitmap {
                 right += 1;
             }
             for i in left..=right {
-                self.set(i, y, color);
+                filled[y as usize * w + i as usize] = true;
             }
+            spans.push((y, left, right));
+
             // queue one seed per run of target pixels in the rows above and below
             for ny in [y - 1, y + 1] {
                 let mut inside = false;
                 for i in left..=right {
-                    let matches = self.get(i, ny) == Some(target);
+                    let matches = self.get(i, ny) == Some(target) && !filled[ny as usize * w + i as usize];
                     if matches && !inside {
                         stack.push((i, ny));
                     }
@@ -339,6 +349,76 @@ impl Bitmap {
                 }
             }
         }
+
+        // antialiased pixels touching the region (8-neighborhood) get their share of the
+        // old color replaced, instead of being left behind as a halo
+        let mut edges: Vec<(i32, i32, [u8; 4])> = Vec::new();
+        if smooth_edges {
+            let height = self.height as i32;
+            let mut seen = filled.clone();
+            for &(y, left, right) in &spans {
+                for ny in y - 1..=y + 1 {
+                    for nx in left - 1..=right + 1 {
+                        if nx < 0 || ny < 0 || nx >= w as i32 || ny >= height {
+                            continue;
+                        }
+                        let i = ny as usize * w + nx as usize;
+                        if seen[i] {
+                            continue;
+                        }
+                        seen[i] = true;
+                        if let Some(c) = self.blend_edge(nx, ny, target, color) {
+                            edges.push((nx, ny, c));
+                        }
+                    }
+                }
+            }
+        }
+
+        for &(y, left, right) in &spans {
+            self.fill_rect(left, y, right - left + 1, 1, color);
+        }
+        for (x, y, c) in edges {
+            self.set(x, y, c);
+        }
+    }
+
+    /// New color of an antialiased pixel next to a filled region, or `None` to keep it.
+    /// The pixel is modeled as a mix of the old region color `target` and a line color;
+    /// only the `target` share of the mix is replaced by `color`.
+    fn blend_edge(&self, x: i32, y: i32, target: [u8; 4], color: [u8; 4]) -> Option<[u8; 4]> {
+        let c = self.get(x, y)?;
+        if c == target {
+            return None; // not connected to the region, so leave it alone
+        }
+        let dist2 = |p: [u8; 4]| -> i32 {
+            (0..3).map(|k| (p[k] as i32 - target[k] as i32).pow(2)).sum()
+        };
+        // the most distant color nearby stands in for the line color
+        let mut line = c;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if let Some(n) = self.get(x + dx, y + dy) {
+                    if dist2(n) > dist2(line) {
+                        line = n;
+                    }
+                }
+            }
+        }
+        let d: [f32; 3] = std::array::from_fn(|k| line[k] as f32 - target[k] as f32);
+        let len2: f32 = d.iter().map(|v| v * v).sum();
+        // share of the line color in this pixel (1.0 = solid line)
+        let a = ((0..3)
+            .map(|k| (c[k] as f32 - target[k] as f32) * d[k])
+            .sum::<f32>()
+            / len2)
+            .clamp(0., 1.);
+        let mut out = c;
+        for k in 0..3 {
+            let v = c[k] as f32 + (1. - a) * (color[k] as f32 - target[k] as f32);
+            out[k] = v.round().clamp(0., 255.) as u8;
+        }
+        Some(out)
     }
 
     /// Copy a rectangle into a new bitmap (pixels outside of this bitmap become background).
@@ -1306,7 +1386,7 @@ impl Application {
             }
             Tool::Fill => {
                 let color = to_rgba8(self.current_color);
-                self.bitmap.flood_fill(p.0, p.1, color);
+                self.bitmap.flood_fill(p.0, p.1, color, self.antialias);
                 self.record_history();
             }
             Tool::Picker => {
