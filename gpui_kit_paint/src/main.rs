@@ -6,10 +6,11 @@ use std::sync::Arc;
 use gpui_kit::*;
 use gpui_kit::assets::{AllAssets, IconName};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
-use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
+use gpui_kit::component::input::{InputState, NumberInput};
+use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
-use gpui_kit::component::{ActiveTheme, Icon, Sizable};
+use gpui_kit::component::{ActiveTheme, Icon, IndexPath, Sizable};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::DialogFooter;
 
@@ -27,7 +28,11 @@ const PALETTE: [u32; 20] = [
     0xa349a4, 0xc8bfe7, // purple, lavender
 ];
 
-const SIDEBAR_WIDTH: f32 = 112.;
+const BRUSH_SIZES: [&str; 16] = [
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "12", "16", "24", "32", "48", "64",
+];
+
+const SIDEBAR_WIDTH: f32 = 72.;
 const SWATCH_SIZE: f32 = 16.;
 const FOOTER_HEIGHT: f32 = 32.;
 
@@ -472,7 +477,7 @@ enum Tool {
     Fill,
     Picker,
     Line,
-    Rect,
+    Rectangle,
     Oval,
     Select,
 }
@@ -513,7 +518,7 @@ pub struct Application {
     zoom_percent: f32,
     // how far the viewport is scrolled into the content, in logical pixels (>= 0)
     scroll: (f32, f32),
-    size_input: Entity<InputState>,
+    size_select: Entity<SelectState<SearchableVec<&'static str>>>,
     width_input: Entity<InputState>,
     height_input: Entity<InputState>,
     color_picker: Entity<ColorPickerState>,
@@ -533,27 +538,26 @@ pub struct Application {
 impl Application {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
 
-        // brush size input
-        let size_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value("1")
-                .step(1.)
-                .min(1.)
+        // brush size select
+        let size_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(BRUSH_SIZES.to_vec()),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
         });
 
-        // reflect the number input into the brush size
-        let size_sub = cx.subscribe_in(&size_input, window, |this, state, ev, _window, cx| {
-            if let InputEvent::Change = ev {
-                let text = state.read(cx).value();
-                // a typed value may be empty or out of range while editing; ignore/clamp it
-                if let Ok(v) = text.parse::<f32>() {
-                    if v.is_finite() {
-                        this.brush_size = (v.round() as i32).clamp(1, 500);
+        // reflect the select into the brush size
+        let size_sub = cx.subscribe_in(&size_select, window, |this, _, ev, _, cx| {
+                if let SelectEvent::Confirm(Some(val)) = ev {
+                    if let Ok(v) = val.parse::<i32>() {
+                        this.brush_size = v.clamp(1, 500);
                         cx.notify();
                     }
                 }
-            }
-        });
+            },
+        );
 
         // canvas size inputs (applied with the Resize button)
         let width_input = cx.new(|cx| {
@@ -621,7 +625,7 @@ impl Application {
             current_color: initial_color,
             zoom_percent: 100.,
             scroll: (0., 0.),
-            size_input,
+            size_select,
             width_input,
             height_input,
             color_picker,
@@ -1103,11 +1107,11 @@ impl Application {
             let touched: Option<Rect> = match self.tool {
                 Tool::Line => Some(cov.add_capsule(pixel_center(start), pixel_center(end), r)),
                 // a filled rectangle is pixel-aligned, so it needs no smoothing
-                Tool::Rect if self.shape_filled => {
+                Tool::Rectangle if self.shape_filled => {
                     self.bitmap.rect(x0, y0, x1, y1, size, true, color);
                     None
                 }
-                Tool::Rect => {
+                Tool::Rectangle => {
                     let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
                     let mut rect = cov.add_capsule(pixel_center(corners[0]), pixel_center(corners[1]), r);
                     for i in 1..4 {
@@ -1139,7 +1143,7 @@ impl Application {
         } else {
             match self.tool {
                 Tool::Line => self.bitmap.line(start, end, size, color),
-                Tool::Rect => self.bitmap.rect(x0, y0, x1, y1, size, self.shape_filled, color),
+                Tool::Rectangle => self.bitmap.rect(x0, y0, x1, y1, size, self.shape_filled, color),
                 Tool::Oval => self.bitmap.ellipse(x0, y0, x1, y1, size, self.shape_filled, color),
                 _ => {}
             }
@@ -1302,7 +1306,7 @@ impl Application {
                     self.tool = Tool::Pencil;
                 }
             }
-            Tool::Line | Tool::Rect | Tool::Oval => {
+            Tool::Line | Tool::Rectangle | Tool::Oval => {
                 self.drag = Drag::Shape { start: p };
                 self.last_pos = p;
                 self.shape_backup = Some(self.bitmap.clone());
@@ -1529,16 +1533,16 @@ impl Application {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
 
         let open_button = Button::new("btn-open")
-            .ghost().xsmall().icon(IconName::Folder).tooltip("Open (Ctrl+O)")
+            .ghost().small().icon(IconName::Folder).tooltip("Open (Ctrl+O)")
             .on_click(cx.listener(|this, _, window, cx| this.open_png(window, cx)));
         let save_button = Button::new("btn-save")
-            .ghost().xsmall().icon(IconName::HardDrive).tooltip("Save (Ctrl+S)")
+            .ghost().small().icon(IconName::HardDrive).tooltip("Save (Ctrl+S)")
             .on_click(cx.listener(|this, _, _, cx| this.save_png(cx)));
         let undo_button = Button::new("btn-undo")
-            .ghost().xsmall().icon(IconName::Undo2).tooltip("Undo (Ctrl+Z)")
+            .ghost().small().icon(IconName::Undo2).tooltip("Undo (Ctrl+Z)")
             .on_click(cx.listener(|this, _, window, cx| this.undo(window, cx)));
         let redo_button = Button::new("btn-redo")
-            .ghost().xsmall().icon(IconName::Redo2).tooltip("Redo (Ctrl+Y)")
+            .ghost().small().icon(IconName::Redo2).tooltip("Redo (Ctrl+Y)")
             .on_click(cx.listener(|this, _, window, cx| this.redo(window, cx)));
 
         let files = div()
@@ -1564,7 +1568,7 @@ impl Application {
             .child(self.tool_button("Fill", IconName::PaintBucket, Tool::Fill, cx))
             .child(self.tool_button("Pick", IconName::Pipette, Tool::Picker, cx))
             .child(self.tool_button("Line", IconName::Slash, Tool::Line, cx))
-            .child(self.tool_button("Rect", IconName::Square, Tool::Rect, cx))
+            .child(self.tool_button("Rect", IconName::Square, Tool::Rectangle, cx))
             .child(self.tool_button("Oval", IconName::Ellipse, Tool::Oval, cx))
             .child(self.tool_button("Select", IconName::SquareDashedMousePointer, Tool::Select, cx));
 
@@ -1584,10 +1588,9 @@ impl Application {
                 cx.notify();
             }));
 
-        // brush size input
-        let brush_size = div()
-            .w_full()
-            .child(NumberInput::new(&self.size_input).xsmall());
+        // brush size select
+        let brush_size = div().w_full()
+            .child(Select::new(&self.size_select).xsmall());
 
         // current color indicator
         let current = ColorPicker::new(&self.color_picker).anchor(Anchor::TopRight);
@@ -1824,6 +1827,11 @@ fn window_options(cx: &mut App) -> WindowOptions {
     let bounds = Bounds::centered(None, size(px(900.), px(640.)), cx);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some(SharedString::new("min-paint")),
+            appears_transparent: false,
+            traffic_light_position: None
+        }),
         ..Default::default()
     }
 }
