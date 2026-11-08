@@ -1,0 +1,7 @@
+[package]
+name = "rodio"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rodio = { version = "0.21", features = ["symphonia-aac", "symphonia-isomp4"] }

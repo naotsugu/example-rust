@@ -47,3 +47,4 @@ $ rustup update
 | [egui_paint](egui_paint/)           | egui paint example. |
 | [vello_hello](vello_hello/)         | vello example. |
 | [vello_cpu_hello](vello_cpu_hello/) | vello cpu example. |
+| [rodio](rodio/) | rodio play AAC（Advanced Audio Coding）example. |
